@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_description">Lets the Date Time Pill paste the current date or time where your cursor is. It does not read, store or send anything.</string>
+</resources>
