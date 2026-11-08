@@ -185,7 +185,7 @@ class PillService : AccessibilityService() {
             inserted.remove(side)
             val i = current.lastIndexOf(prev)
             if (i >= 0) {
-                return writeText(node, current.removeRange(i, i + prev.length), i)
+                writeText(node, current.removeRange(i, i + prev.length), i)
             }
             return true
         }
@@ -204,18 +204,28 @@ class PillService : AccessibilityService() {
         return ok
     }
 
+    // Writes the text, then checks the box really changed.
+    // Returns false if the box ignored us, so the clipboard route can take over.
     private fun writeText(node: AccessibilityNodeInfo, text: String, cursor: Int): Boolean {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
         val sel = Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
-        return ok
+
+        // Give the app a moment, then look again
+        try {
+            Thread.sleep(80)
+        } catch (_: InterruptedException) {
+        }
+        node.refresh()
+        val now = if (node.isShowingHintText) "" else (node.text?.toString() ?: "")
+        return now == text
     }
 
     // Clipboard route: no "take it back out" here, use the app's own undo.
