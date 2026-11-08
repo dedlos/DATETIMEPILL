@@ -2,6 +2,8 @@ package com.arb.datetimepill
 
 import android.accessibilityservice.AccessibilityService
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -81,6 +83,10 @@ class PillService : AccessibilityService() {
     private fun dateText() = SimpleDateFormat("ddMMMyy", Locale.ENGLISH).format(Date()) // 07Nov26
     private fun timeText() = SimpleDateFormat("HH:mm", Locale.ENGLISH).format(Date())   // 14:35
 
+    private fun textFor(side: String) = if (side == "date") dateText() else timeText()
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
     // ---------- The pill itself ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -145,50 +151,111 @@ class PillService : AccessibilityService() {
     // ---------- Pasting ----------
     private fun tap(side: String) {
         val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (node == null || !node.isEditable || node.isPassword) {
-            Toast.makeText(this, "Tap into a text box first", Toast.LENGTH_SHORT).show()
+
+        if (node != null && node.isPassword) {
+            toast("Not available in password boxes")
             return
         }
 
-        val current = if (node.isShowingHintText) "" else (node.text?.toString() ?: "")
-        val prev = inserted[side]
+        // Route 1: normal text boxes (Keep, messages, notes...)
+        var done = false
+        if (node != null && node.isEditable) {
+            done = insertDirect(node, side)
+        }
 
-        if (prev != null) {
-            // Second tap on the same side: take it back out
-            val i = current.lastIndexOf(prev)
-            if (i >= 0) {
-                writeText(node, current.removeRange(i, i + prev.length), i)
-            }
-            inserted.remove(side)
-        } else {
-            val text = if (side == "date") dateText() else timeText()
-            var s = node.textSelectionStart
-            var e = node.textSelectionEnd
-            if (s < 0 || e < 0) {
-                s = current.length
-                e = current.length
-            }
-            val from = minOf(s, e).coerceIn(0, current.length)
-            val to = maxOf(s, e).coerceIn(0, current.length)
-            writeText(node, current.substring(0, from) + text + current.substring(to), from + text.length)
-            inserted[side] = text
+        // Route 2: apps like Docs and Sheets, via the clipboard
+        if (!done) {
+            done = insertByPaste(side)
+        }
+
+        if (!done) {
+            toast("Couldn't find a place to paste")
         }
 
         handler.removeCallbacks(hideRunnable)
         handler.postDelayed(hideRunnable, stayAfterTap)
     }
 
-    private fun writeText(node: AccessibilityNodeInfo, text: String, cursor: Int) {
+    private fun insertDirect(node: AccessibilityNodeInfo, side: String): Boolean {
+        val current = if (node.isShowingHintText) "" else (node.text?.toString() ?: "")
+        val prev = inserted[side]
+
+        if (prev != null) {
+            // Second tap on the same side: take it back out
+            inserted.remove(side)
+            val i = current.lastIndexOf(prev)
+            if (i >= 0) {
+                return writeText(node, current.removeRange(i, i + prev.length), i)
+            }
+            return true
+        }
+
+        val text = textFor(side)
+        var s = node.textSelectionStart
+        var e = node.textSelectionEnd
+        if (s < 0 || e < 0) {
+            s = current.length
+            e = current.length
+        }
+        val from = minOf(s, e).coerceIn(0, current.length)
+        val to = maxOf(s, e).coerceIn(0, current.length)
+        val ok = writeText(node, current.substring(0, from) + text + current.substring(to), from + text.length)
+        if (ok) inserted[side] = text
+        return ok
+    }
+
+    private fun writeText(node: AccessibilityNodeInfo, text: String, cursor: Int): Boolean {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
         val sel = Bundle().apply {
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
             putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+        return ok
+    }
+
+    // Clipboard route: no "take it back out" here, use the app's own undo.
+    private fun insertByPaste(side: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: findFocusedNode(root, 0)
+            ?: return false
+
+        val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        val old = try {
+            cm.primaryClip
+        } catch (_: Exception) {
+            null
+        }
+
+        cm.setPrimaryClip(ClipData.newPlainText("date/time", textFor(side)))
+        val ok = target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+
+        // Put your old clipboard back shortly afterwards
+        handler.postDelayed({
+            try {
+                if (old != null) cm.setPrimaryClip(old) else cm.clearPrimaryClip()
+            } catch (_: Exception) {
+            }
+        }, 700)
+
+        return ok
+    }
+
+    private fun findFocusedNode(n: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > 25) return null
+        if (n.isFocused) return n
+        for (i in 0 until n.childCount) {
+            val child = n.getChild(i) ?: continue
+            val found = findFocusedNode(child, depth + 1)
+            if (found != null) return found
+        }
+        return null
     }
 }
 
