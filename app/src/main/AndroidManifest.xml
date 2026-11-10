@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <queries>
+        <package android:name="com.android.settings" />
+    </queries>
+
     <application
         android:label="Date Time Pill"
         android:theme="@android:style/Theme.DeviceDefault.Light">
@@ -32,6 +36,17 @@
             android:exported="true"
             android:icon="@drawable/ic_tile"
             android:label="Date/Time"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".NavTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="Navigation"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
