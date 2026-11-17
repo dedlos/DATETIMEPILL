@@ -30,9 +30,8 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The floating DATE | TIME pill.
- * It ignores every screen event. It only acts when you tap the pill,
- * and then only writes text into the box your cursor is in.
+ * The floating pills: NAV on top, DATE | TIME underneath.
+ * It ignores every screen event. It only acts when you tap a pill.
  * There is no internet permission, so nothing can leave the phone.
  */
 class PillService : AccessibilityService() {
@@ -46,7 +45,7 @@ class PillService : AccessibilityService() {
     private val inserted = mutableMapOf<String, String>() // "date"/"time" -> text we pasted
     private val hideRunnable = Runnable { hidePill() }
 
-    // How long the pill stays after a tap (milliseconds)
+    // How long the pills stay after a tap (milliseconds)
     private val stayAfterTap = 3000L
 
     override fun onServiceConnected() {
@@ -87,36 +86,65 @@ class PillService : AccessibilityService() {
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
-    // ---------- The pill itself ----------
+    // ---------- The pills themselves ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun sideLabel(label: String, onTap: () -> Unit) = TextView(this).apply {
+    private fun pillBackground() = GradientDrawable().apply {
+        cornerRadius = dp(30).toFloat()
+        setColor(Color.parseColor("#2B2B2B"))
+        setStroke(dp(2), Color.WHITE)
+    }
+
+    // One half of a pill. Every half is the same width so the two pills line up.
+    private fun half(label: String, onTap: (() -> Unit)?) = TextView(this).apply {
         text = label
         setTextColor(Color.WHITE)
         textSize = 18f
         setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.CENTER
-        setPadding(dp(28), dp(14), dp(28), dp(14))
-        setOnClickListener { onTap() }
+        setPadding(dp(8), dp(14), dp(8), dp(14))
+        layoutParams = LinearLayout.LayoutParams(dp(112), LinearLayout.LayoutParams.WRAP_CONTENT)
+        if (onTap != null) setOnClickListener { onTap() }
+    }
+
+    private fun divider() = View(this).apply {
+        setBackgroundColor(Color.WHITE)
+        layoutParams = LinearLayout.LayoutParams(dp(2), LinearLayout.LayoutParams.MATCH_PARENT)
+    }
+
+    private fun makePill(left: TextView, right: TextView) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        background = pillBackground()
+        addView(left)
+        addView(divider())
+        addView(right)
     }
 
     private fun showPill() {
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
         inserted.clear()
 
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(30).toFloat()
-                setColor(Color.parseColor("#2B2B2B"))
-                setStroke(dp(2), Color.WHITE)
-            }
-            addView(sideLabel("DATE") { tap("date") })
-            addView(View(this@PillService).apply {
-                setBackgroundColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(dp(2), LinearLayout.LayoutParams.MATCH_PARENT)
-            })
-            addView(sideLabel("TIME") { tap("time") })
+        // Top pill: spare slot on the left (blank for now), NAV on the right
+        val navPill = makePill(
+            half(" ", null),
+            half("NAV") { openNavigation() }
+        )
+
+        // Bottom pill: DATE | TIME
+        val dateTimePill = makePill(
+            half("DATE") { tap("date") },
+            half("TIME") { tap("time") }
+        )
+
+        val gap = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(2), dp(6))
+        }
+
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(navPill)
+            addView(gap)
+            addView(dateTimePill)
         }
 
         val params = WindowManager.LayoutParams(
@@ -129,11 +157,11 @@ class PillService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = dp(340) // height above the bottom of the screen; change to move the pill
+            y = dp(340) // height above the bottom of the screen; change to move the pills
         }
 
-        wm.addView(row, params)
-        pill = row
+        wm.addView(stack, params)
+        pill = stack
     }
 
     private fun hidePill() {
@@ -146,6 +174,48 @@ class PillService : AccessibilityService() {
         }
         pill = null
         inserted.clear()
+    }
+
+    // ---------- NAV: open the page where you choose the navigation style ----------
+    private fun openNavigation() {
+        hidePill()
+
+        val candidates = listOf(
+            Intent().setClassName(
+                "com.android.settings",
+                "com.android.settings.Settings\$SystemNavigationGestureSettingsActivity"
+            ),
+            Intent("android.settings.SYSTEM_NAVIGATION_SETTINGS"),
+            Intent("android.settings.GESTURE_NAVIGATION_SETTINGS"),
+            Intent().setClassName(
+                "com.android.settings",
+                "com.android.settings.Settings\$GestureNavigationSettingsActivity"
+            )
+        )
+
+        var chosen: Intent? = null
+        var number = 0
+        for ((index, candidate) in candidates.withIndex()) {
+            if (packageManager.resolveActivity(candidate, 0) != null) {
+                chosen = candidate
+                number = index + 1
+                break
+            }
+        }
+
+        if (chosen == null) {
+            // Fallback: open Settings and say where to go
+            chosen = Intent(Settings.ACTION_SETTINGS)
+            toast("Go to System, then Gestures, then System navigation")
+        }
+
+        chosen.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(chosen)
+            toast("Opened address $number")
+        } catch (_: Exception) {
+            toast("Couldn't open Settings")
+        }
     }
 
     // ---------- Pasting ----------
@@ -269,7 +339,7 @@ class PillService : AccessibilityService() {
     }
 }
 
-/** The tile in the swipe-down panel that shows or hides the pill. */
+/** The tile in the swipe-down panel that shows or hides the pills. */
 class PillTileService : TileService() {
 
     override fun onStartListening() {
@@ -293,6 +363,56 @@ class PillTileService : TileService() {
     private fun refresh() {
         qsTile?.apply {
             label = "Date/Time"
+            state = if (PillService.instance?.isShowing() == true) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+            updateTile()
+        }
+    }
+}
+
+/** A small setup screen with shortcuts to the two settings pages you need. */
+class MainActivity : Activity() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 96, 48, 48)
+        }
+
+        column.addView(TextView(this).apply {
+            text = "Date Time Pill\n\n" +
+                "Setup, once only:\n" +
+                "1. Tap the first button. Tap the three dots (top right) and choose " +
+                "\"Allow restricted settings\".\n" +
+                "2. Tap the second button, find Date Time Pill and switch it on.\n" +
+                "3. Swipe down twice, tap the pencil, and drag the Date/Time tile into your panel.\n\n" +
+                "Then, whenever you want the pills, tap the tile."
+            textSize = 16f
+        })
+
+        column.addView(Button(this).apply {
+            text = "1. App info (restricted settings)"
+            setOnClickListener {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        })
+
+        column.addView(Button(this).apply {
+            text = "2. Accessibility settings"
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        })
+
+        setContentView(column)
+    }
+}       label = "Date/Time"
             state = if (PillService.instance?.isShowing() == true) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
             updateTile()
         }
